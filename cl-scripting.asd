@@ -6,4 +6,4 @@
   :license "MIT" ;; code originally excerpted from ASDF
   :author "Francois-Rene Rideau"
   :class :package-inferred-system
-  :depends-on ("cl-scripting/failure" "cl-scripting/commands"))
+  :depends-on ("cl-scripting/cl-scripting"))
