@@ -3,8 +3,9 @@
 (defpackage :cl-scripting/failure
   (:use :common-lisp :fare-utils)
   (:export
-   #:with-failure-context #:success #:failure #:success-if #:failure-if #:fail!
-   #:without-stopping #:call-without-stopping #:run-command))
+   #:success #:failure #:successp #:failurep #:success-values #:failure-failures
+   #:with-failure-context #:success-if #:failure-if #:fail!
+   #:without-stopping #:call-without-stopping))
 
 (in-package :cl-scripting/failure)
 
@@ -142,12 +143,3 @@
         (when (failurep (multiple-value-list (with-failure-context () (funcall thunk))))
           (setf failurep t)))
       (failure-if failurep (make-failures)))))
-
-(defun run-command (fun &rest args)
-  (let ((results (multiple-value-list (with-failure-context () (apply fun args)))))
-    ;; Don't print anything on success for regular commands, otherwise print all values returned.
-    (if (failurep results)
-        (let ((failures (failure-failures results)))
-          (format t "~&Failure~P:~{~& ~A~}~&" (length failures) failures))
-        (format t "~{~&~S~&~}" (if (successp results) (success-values results) results)))
-    (apply 'values results)))
