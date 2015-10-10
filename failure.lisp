@@ -1,6 +1,6 @@
 ;;;; Useful information when failing.
 
-(defpackage :cl-scripting/failure
+(uiop:define-package :cl-scripting/failure
   (:use :common-lisp :fare-utils)
   (:export
    #:success #:failure #:successp #:failurep #:success-values #:failure-failures
