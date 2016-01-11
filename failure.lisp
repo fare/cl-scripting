@@ -9,12 +9,13 @@
 
 (in-package :cl-scripting/failure)
 
-(defvar *fail-verbose* nil)
-(defvar *execution-context* nil) ;; context for debugging information
-(defvar *failures* nil)
-(defvar *failurep* nil)
+(defclass context ()
+  ((names :reader names :initarg :names :type list)
+   (muffle-failures :reader muffle-failures :initarg :muffle-failures :type boolean)
+   (ancestor :reader ancestor :initarg :ancestor :type (or context null))
+   (failures :accessor failures :initform nil :type list)))
 
-;;;(defvar *failure-handler* nil)
+(defvar *context* nil)
 
 (define-condition execution-error (error)
   ())
@@ -33,7 +34,7 @@
 (defmethod print-object ((failure execution-failure) stream)
   (if *print-escape* (call-next-method)
       (format stream "~@[In ~{~A~^, ~}: ~]~:[FAILED~;~:*~A~]"
-              (reverse (remove nil (failure-context failure)))
+              (reverse (failure-context failure))
               (failure-reason failure))))
 
 (define-condition execution-failures (execution-error)
@@ -56,11 +57,16 @@
   (error (apply 'make-error reason-arguments)))
 
 (defun success (&rest values)
-  "Return magic values that signal success"
+  (apply 'values t '#:success values))
+
+(defun result-values (&rest values)
+  "If values represent success, pass them on.
+If values represent failure, fail.
+Otherwise, return values representing success with given values."
   (cond
     ((successp values) (apply 'values values))
-    ((failurep values) (apply 'values values))
-    (t (apply 'values t '#:success values))))
+    ((failurep values) (error (make-failures (failure-failures values))))
+    (t (apply 'success values))))
 
 (defun failure (&optional failures)
   "Return magic values that signal failure"
@@ -96,50 +102,63 @@
   (if (typep reason 'execution-error)
       reason
       (make-condition 'execution-failure
-                      :context *execution-context*
+                      :context (names *context*)
                       :reason (apply 'make-error reason arguments))))
 
 (defun make-failures (&optional list)
   (make-condition 'execution-failures :failures list))
 
-(defmacro with-failure-context ((&key name (fail-fast t)) &body body)
-  `(call-with-failure-context (lambda () ,@body) :name ,name :fail-fast ,fail-fast))
+(defun register-failures (failures)
+  (etypecase failures
+    (execution-failure
+     (push failures (failures (or (ancestor *context*) *context*))))
+    (execution-failures
+     (register-failures (failure-list failures)))
+    (list
+     (map () 'register-failures failures))
+    (error
+     (register-failures (make-failure failures)))))
 
-(defun register-failures (failure)
-  (let ((failure (make-failure failure)))
-    (etypecase failure
-      (execution-failures
-       (setf *failures* (append (failure-list failure) *failures*)))
-      (execution-failure
-       (push failure *failures*)))
-    failure))
+(defmacro with-failure-context ((&rest keys &key name muffle-failures) &body body)
+  (declare (ignore name muffle-failures))
+  `(call-with-failure-context (lambda () ,@body) ,@keys))
 
-(defun call-with-failure-context (thunk &key name (fail-fast t))
-  (let ((toplevel (null *execution-context*))
-        (*execution-context* (cons name *execution-context*)))
-    (labels ((compute ()
-               (block nil
-                 (handler-bind ((error (lambda (c)
-                                         (register-failures c)
-                                         (cond
-                                           (toplevel (return (failure *failures*)))
-                                           (fail-fast (error (make-failures)))
-                                           (t (return (failure)))))))
+(defun call-with-failure-context (thunk &key name (muffle-failures nil mfp))
+  (block nil
+    (let* ((parent *context*)
+           (toplevel (not parent))
+           (muffle-failures (if mfp muffle-failures toplevel))
+           (context
+            (make-instance 'context
+                           :names (let ((p (when parent (names parent)))) (if name (cons name p) p))
+                           :ancestor (when parent (or (ancestor parent) parent))
+                           :muffle-failures muffle-failures))
+           (*context* context))
+      (labels ((process-failures (c)
+                 (register-failures c)
+                 (let ((failures (when toplevel (reverse (failures context)))))
+                   (if muffle-failures
+                       (return (failure failures))
+                       (error (make-failures failures)))))
+               (compute ()
+                 (handler-bind ((error #'process-failures))
                    (funcall thunk))))
-             (doit ()
-               (let ((results (multiple-value-list (compute))))
-                 (if (and toplevel *failures*) (failure (reverse *failures*)) (apply 'success results)))))
-      (if toplevel
-          (let ((*failures* nil)) (doit))
-          (doit)))))
+        (let ((results (multiple-value-list (compute))))
+          (when (failurep results)
+            (process-failures (failure-failures results)))
+          (apply 'result-values results))))))
 
 (defmacro without-stopping (() &body body)
   `(call-without-stopping (list ,@(mapcar (lambda (form) `(lambda () ,form)) body))))
 
 (defun call-without-stopping (thunks)
-  (with-failure-context (:fail-fast nil)
-    (let ((failurep nil))
+  (with-failure-context ()
+    (let ((failurep nil)
+          (results nil))
       (dolist (thunk thunks)
-        (when (failurep (multiple-value-list (with-failure-context () (funcall thunk))))
-          (setf failurep t)))
-      (failure-if failurep (make-failures)))))
+        (setf results (multiple-value-list
+                       (with-failure-context (:muffle-failures t)
+                         (funcall thunk))))
+        (when (failurep results) (setf failurep t)))
+      (when failurep (fail!))
+      (apply 'values results))))
