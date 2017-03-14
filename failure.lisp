@@ -32,7 +32,10 @@
    (reason :initarg :reason :reader failure-reason)))
 
 (defmethod print-object ((failure execution-failure) stream)
-  (if *print-escape* (call-next-method)
+  (if *print-escape*
+      (print-unreadable-object (failure stream :type t :identity nil)
+        (let ((*print-escape* nil))
+          (print-object failure stream)))
       (format stream "~@[In ~{~A~^, ~}: ~]~:[FAILED~;~:*~A~]"
               (reverse (failure-context failure))
               (failure-reason failure))))
